@@ -1,0 +1,110 @@
+name: GitHub CI
+on: [push]
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  linux_multi_arch_build:
+    # The host should always be linux
+    runs-on: ubuntu-latest
+    name: Build on ${{ matrix.distro }} ${{ matrix.arch }}
+
+    # Run steps on a matrix of these arch/distro combinations
+    strategy:
+      matrix:
+        include:
+          # - arch: aarch64
+          #   distro: ubuntu20.04
+          - arch: armv7
+            distro: ubuntu20.04
+          # - arch: 386
+          #   distro: ubuntu20.04
+          #   base_image: i386/ubuntu:20.04
+          # - arch: x86_64
+          #   distro: ubuntu20.04
+          #   base_image: amd64/ubuntu:20.04
+
+    steps:
+      - name: Get lowercase string for the repository name
+        id: lowercase-repo-name
+        uses: ASzc/change-string-case-action@v2
+        with:
+          string: ${{ github.event.repository.name }}
+
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - uses: uraimo/run-on-arch-action@v2
+        name: Run commands
+        id: runcmd
+        with:
+          arch: ${{ matrix.arch }}
+          distro: ${{ matrix.distro }}
+          base_image: ${{ matrix.base_image }}
+
+          # Not required, but speeds up builds by storing container images in
+          # a GitHub package registry.
+          githubToken: ${{ github.token }}
+
+          # Install some dependencies in the container. This speeds up builds if
+          # you are also using githubToken. Any dependencies installed here will
+          # be part of the container image that gets cached, so subsequent
+          # builds don't have to re-install them. The image layer is cached
+          # publicly in your project's package repository, so it is vital that
+          # no secrets are present in the container state or logs.
+          install: |
+            #!/bin/bash
+
+            set -x
+
+            apt update
+            apt install -y git build-essential gcc-8 g++-8 \
+              python3-pip libevent-dev libssl-dev \
+              libcurl4-openssl-dev libpcre2-dev ninja-build pkg-config
+
+          # Set an output parameter `uname` for use in subsequent steps
+          run: |
+            #!/bin/bash
+
+            set -x
+
+            uname -a
+
+            echo ::set-output name=uname::$(uname -a)
+
+            git config --global --add safe.directory '*'
+
+            export CC=/usr/bin/gcc-8
+            export CXX=/usr/bin/g++-8
+
+            rm ./output/.gitignore || true
+
+            echo "Build CMake from source ..."
+            git clone -b master --single-branch --depth 1 https://github.com/Kitware/CMake.git CMake
+            cd CMake
+            ./bootstrap --prefix=/usr/local --parallel=$(nproc)
+            make -j$(nproc)
+            make install
+
+            cpack -G DEB
+            mv *.deb ../output/
+
+            cd ..
+            rm -rf CMake
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.lowercase-repo-name.outputs.lowercase }}_linux_${{ matrix.distro }}_${{ matrix.arch }}
+          path: output/
+
+      - name: Draft Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: ./output/*.tar.gz
+          draft: true
