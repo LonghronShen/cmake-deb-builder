@@ -84,7 +84,7 @@ jobs:
             rm ./output/.gitignore || true
 
             echo "Build CMake from source ..."
-            git clone -b master --single-branch --depth 1 https://github.com/Kitware/CMake.git CMake
+            git clone -b '${{ github.ref_name }}' --single-branch --depth 1 https://github.com/Kitware/CMake.git CMake
             cd CMake
             ./bootstrap --prefix=/usr/local --parallel=$(nproc)
             make -j$(nproc)
